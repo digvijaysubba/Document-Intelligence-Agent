@@ -15,8 +15,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ==================== CONFIG ====================
-
 AZURE_ENDPOINT = os.environ["AZURE_ENDPOINT"]
 AZURE_API_KEY = os.environ["AZURE_API_KEY"]
 DEPLOYMENT_NAME = os.getenv("AZURE_DEPLOYMENT_NAME", "gpt-4o")
@@ -25,13 +23,12 @@ API_VERSION = os.getenv("AZURE_API_VERSION", "2024-12-01-preview")
 DB_PATH = "document_queries.db"
 CHUNK_SIZE = 2000  # characters per chunk
 
-# ==================== DATABASE SETUP ====================
 
 def init_database():
     """Initialize SQLite database for query history"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS queries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,7 +38,7 @@ def init_database():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    
+
     conn.commit()
     conn.close()
 
@@ -49,12 +46,12 @@ def save_query(document_name, query, response):
     """Save query and response to database"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
+
     cursor.execute("""
         INSERT INTO queries (document_name, query, response, timestamp)
         VALUES (?, ?, ?, ?)
     """, (document_name, query, response, datetime.now()))
-    
+
     conn.commit()
     conn.close()
 
@@ -62,7 +59,7 @@ def get_query_history(document_name=None, limit=10):
     """Retrieve query history from database"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
+
     if document_name:
         cursor.execute("""
             SELECT document_name, query, response, timestamp FROM queries
@@ -74,12 +71,11 @@ def get_query_history(document_name=None, limit=10):
             SELECT document_name, query, response, timestamp FROM queries
             ORDER BY timestamp DESC LIMIT ?
         """, (limit,))
-    
+
     results = cursor.fetchall()
     conn.close()
     return results
 
-# ==================== DOCUMENT PROCESSING ====================
 
 def extract_text_from_pdf(file_path):
     """Extract text from PDF file"""
@@ -116,7 +112,7 @@ def extract_text_from_txt(file_path):
 def load_document(file_path):
     """Load and extract text from any supported document type"""
     file_ext = Path(file_path).suffix.lower()
-    
+
     if file_ext == '.pdf':
         return extract_text_from_pdf(file_path)
     elif file_ext == '.docx':
@@ -126,22 +122,20 @@ def load_document(file_path):
     else:
         raise ValueError(f"Unsupported file type: {file_ext}")
 
-# ==================== TEXT CHUNKING ====================
 
 def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=200):
     """Split text into overlapping chunks for processing"""
     chunks = []
     start = 0
-    
+
     while start < len(text):
         end = start + chunk_size
         chunk = text[start:end]
         chunks.append(chunk)
         start = end - overlap
-    
+
     return chunks
 
-# ==================== PROMPT VALIDATION ====================
 
 def validate_prompt(query, document_summary):
     """
@@ -153,7 +147,7 @@ def validate_prompt(query, document_summary):
         azure_endpoint=AZURE_ENDPOINT,
         api_key=AZURE_API_KEY,
     )
-    
+
     validation_prompt = f"""
 You are a query validator. Determine if the following query is relevant to a document.
 
@@ -165,7 +159,7 @@ Respond with ONLY "VALID" or "INVALID" (no explanation).
 A query is VALID if it's asking for information that could be found in the document.
 A query is INVALID if it's completely unrelated or asking you to do something outside the document scope.
 """
-    
+
     try:
         response = client.chat.completions.create(
             model=DEPLOYMENT_NAME,
@@ -176,14 +170,13 @@ A query is INVALID if it's completely unrelated or asking you to do something ou
             temperature=0.0,
             max_tokens=10
         )
-        
+
         result = response.choices[0].message.content.strip().upper()
         return "VALID" in result
     except Exception as e:
         print(f"Validation error: {e}")
         return True  # Allow by default if validation fails
 
-# ==================== DOCUMENT SUMMARIZATION ====================
 
 def summarize_document(text):
     """Generate a concise summary of the document"""
@@ -192,10 +185,9 @@ def summarize_document(text):
         azure_endpoint=AZURE_ENDPOINT,
         api_key=AZURE_API_KEY,
     )
-    
-    # Use first chunk if document is very long
+
     content = text[:3000] if len(text) > 3000 else text
-    
+
     try:
         response = client.chat.completions.create(
             model=DEPLOYMENT_NAME,
@@ -206,13 +198,12 @@ def summarize_document(text):
             temperature=0.7,
             max_tokens=200
         )
-        
+
         return response.choices[0].message.content
     except Exception as e:
         print(f"Summarization error: {e}")
         return "Unable to generate summary"
 
-# ==================== ENTITY EXTRACTION ====================
 
 def extract_entities(text):
     """Extract key entities (names, dates, amounts, etc.) from document"""
@@ -221,9 +212,9 @@ def extract_entities(text):
         azure_endpoint=AZURE_ENDPOINT,
         api_key=AZURE_API_KEY,
     )
-    
+
     content = text[:2000] if len(text) > 2000 else text
-    
+
     try:
         response = client.chat.completions.create(
             model=DEPLOYMENT_NAME,
@@ -244,7 +235,7 @@ Respond with ONLY valid JSON."""}
             temperature=0.0,
             max_tokens=300
         )
-        
+
         response_text = response.choices[0].message.content
         try:
             return json.loads(response_text)
@@ -254,7 +245,6 @@ Respond with ONLY valid JSON."""}
         print(f"Entity extraction error: {e}")
         return {}
 
-# ==================== QUESTION ANSWERING ====================
 
 def answer_question(text, question, document_name, summary):
     """Answer a question based on document content"""
@@ -264,10 +254,9 @@ def answer_question(text, question, document_name, summary):
         api_key=AZURE_API_KEY,
     )
 
-    # Validate the prompt first
     if not validate_prompt(question, summary):
         return "Your question doesn't appear to be related to this document. Please ask something about the document content."
-    
+
     try:
         response = client.chat.completions.create(
             model=DEPLOYMENT_NAME,
@@ -285,25 +274,21 @@ Provide a clear, concise answer based only on information from the document."""}
             temperature=0.7,
             max_tokens=500
         )
-        
+
         answer = response.choices[0].message.content
-        
-        # Save to database
         save_query(document_name, question, answer)
-        
+
         return answer
     except Exception as e:
         return f"Error generating answer: {e}"
 
-# ==================== MAIN INTERACTIVE SESSION ====================
 
 def run_interactive_session(file_path):
     """Run an interactive Q&A session with a document"""
     print("\n" + "="*60)
     print("DOCUMENT INTELLIGENCE AGENT")
     print("="*60)
-    
-    # Load document
+
     print(f"\nLoading document: {file_path}")
     try:
         document_text = load_document(file_path)
@@ -313,38 +298,34 @@ def run_interactive_session(file_path):
     except Exception as e:
         print(f"Error loading document: {e}")
         return
-    
+
     document_name = Path(file_path).name
-    
-    # Generate summary
+
     print("\nGenerating summary...")
     summary = summarize_document(document_text)
     print(f"\nSUMMARY:\n{summary}")
-    
-    # Extract entities
+
     print("\nExtracting key entities...")
     entities = extract_entities(document_text)
     print(f"\nKEY ENTITIES:\n{json.dumps(entities, indent=2)}")
-    
-    # Q&A loop
+
     print("\n" + "-"*60)
     print("Ask questions about the document (type 'quit' to exit)")
     print("-"*60)
-    
+
     while True:
         question = input("\nYour question: ").strip()
-        
+
         if question.lower() in ['quit', 'exit', 'q']:
             break
-        
+
         if not question:
             continue
-        
+
         print("\nThinking...")
         answer = answer_question(document_text, question, document_name, summary)
         print(f"\nANSWER:\n{answer}")
-    
-    # Show query history
+
     print("\n" + "-"*60)
     print("QUERY HISTORY:")
     print("-"*60)
@@ -354,28 +335,23 @@ def run_interactive_session(file_path):
         print(f"Q: {q}")
         print(f"A: {a[:100]}...")
 
-# ==================== MAIN ====================
 
 if __name__ == "__main__":
-    # Initialize database
     init_database()
-    
-    # Example: run with a test document
-    # For now, create a simple test file
+
     test_file = "sample_document.txt"
-    
-    # Create a sample document if it doesn't exist
+
     if not os.path.exists(test_file):
         with open(test_file, 'w') as f:
             f.write("""
 SERVICE AGREEMENT
 
-This Service Agreement ("Agreement") is entered into as of January 15, 2024, 
+This Service Agreement ("Agreement") is entered into as of January 15, 2024,
 between ABC Corporation ("Service Provider") and XYZ Industries ("Client").
 
 1. SERVICES
-The Service Provider agrees to provide software development and consulting services 
-as requested by the Client. Services include system design, implementation, testing, 
+The Service Provider agrees to provide software development and consulting services
+as requested by the Client. Services include system design, implementation, testing,
 and deployment.
 
 2. PAYMENT TERMS
@@ -390,15 +366,14 @@ and deployment.
 - Upon termination, all project deliverables must be transferred to Client
 
 4. CONFIDENTIALITY
-Both parties agree to maintain confidentiality of proprietary information 
-shared during the engagement. This includes source code, business strategies, 
+Both parties agree to maintain confidentiality of proprietary information
+shared during the engagement. This includes source code, business strategies,
 and client data.
 
 5. LIABILITY
-Service Provider's total liability shall not exceed the total fees paid in the 
+Service Provider's total liability shall not exceed the total fees paid in the
 preceding 12 months. This excludes data breaches and gross negligence.
 """)
         print(f"Created sample document: {test_file}")
-    
-    # Run the interactive session
+
     run_interactive_session(test_file)

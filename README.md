@@ -1,134 +1,119 @@
 # Document Intelligence Agent
 
-A Copilot-style document Q&A and summarization tool powered by Azure OpenAI. Upload any PDF, Word, or text document and ask intelligent questions about its content.
+A Copilot-style document Q&A tool built on Retrieval-Augmented Generation (RAG) with Azure OpenAI and ChromaDB. Load a PDF, Word, or text document and ask questions about its content; answers are grounded in the most relevant passages, checked, reviewed by a human, and logged.
 
 ## Overview
 
 This project demonstrates enterprise-level Generative AI capabilities:
+- **RAG pipeline** — ingestion, chunking, embeddings, and semantic vector search (ChromaDB) feeding retrieved context to GPT-4o
 - **Document Summarization** — automatically generates concise summaries
-- **Intelligent Q&A** — answers questions grounded in document content
+- **Intelligent Q&A** — answers cite the retrieved excerpts they are based on
 - **Entity Extraction** — identifies and categorizes key information (names, dates, amounts, etc.)
-- **Prompt Validation** — responsible AI layer that filters irrelevant queries
-- **Query History** — SQLite database logs all questions and answers for audit and analysis
+- **Responsible AI** — prompt validation on the way in, output filtering on the way out, and human-in-the-loop review before an answer is shown
+- **Query History** — SQLite logs every question, its outcome, and the source chunks for audit and analysis
 
 ## Architecture
 
 ```
-User Input
+Document (PDF / DOCX / TXT)
     ↓
-Document Loading (PDF/DOCX/TXT extraction)
+Text extraction
     ↓
-Text Chunking (handles large documents)
+Chunking (1,000 characters, 200 overlap)
     ↓
-Prompt Validation (responsible AI filter)
+Embeddings (Azure OpenAI) → ChromaDB vector store (persistent, ./chroma_db)
+
+Question
     ↓
-Azure OpenAI API (GPT-4o)
+Prompt validation (is the question about the document?)
     ↓
-Response Generated
+Semantic search in ChromaDB (top 4 chunks)
     ↓
-SQLite Logging (query history)
+GPT-4o answers from the retrieved chunks, with citations
+    ↓
+Output filter (Azure content filter + groundedness check)
+    ↓
+Human review (approve / edit / reject)
+    ↓
+Answer shown + SQLite log (status, sources, review note)
 ```
-
-## Features
-
-### 1. Document Summarization
-Automatically generates a concise summary when you load a document. Useful for quickly understanding document scope and content.
-
-### 2. Question Answering
-Ask any question about the document. The system retrieves relevant sections and generates an accurate answer grounded in the document content.
-
-**Example:**
-- Document: Service Agreement
-- Query: "What is the termination clause?"
-- Answer: "Either party may terminate with 30 days written notice..."
-
-### 3. Entity Extraction
-Automatically identifies and categorizes key information:
-- People and organizations
-- Dates and time references
-- Dollar amounts and numerical values
-- Locations
-- Other critical terms
-
-### 4. Responsible AI Layer
-- **Prompt Validation**: Before answering, the system validates that your question is actually related to the document
-- **Prevents hallucination**: Won't make up answers; tells you if information isn't in the document
-- **Audit Trail**: All queries logged to SQLite for transparency and compliance
 
 ## Requirements
 
-- Python 3.8+
-- Azure OpenAI API key and endpoint
-- Supported document formats: PDF, DOCX, TXT
+- Python 3.10+ (developed on 3.11)
+- An Azure OpenAI resource with two deployments:
+  - a chat model (default name `gpt-4o`)
+  - an embedding model (default name `text-embedding-3-small`)
+- Supported document formats: PDF (text-based), DOCX, TXT
 
 ## Setup
 
-### 1. Install Dependencies
+### 1. Create a virtual environment and install dependencies
 ```bash
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+source .venv/bin/activate     # macOS / Linux
 pip install -r requirements.txt
 ```
 
 ### 2. Configure Azure OpenAI
-Update the configuration in `doc_intelligence_agent.py`:
-```python
-AZURE_ENDPOINT = "your-azure-endpoint"
-AZURE_API_KEY = "your-api-key"
-DEPLOYMENT_NAME = "your-deployment-name"
+Create a `.env` file in the project folder (it is git-ignored):
+```
+AZURE_ENDPOINT=https://<your-resource>.openai.azure.com/
+AZURE_API_KEY=<your-key>
+AZURE_API_VERSION=2024-12-01-preview
+AZURE_DEPLOYMENT_NAME=gpt-4o
+AZURE_EMBEDDING_DEPLOYMENT=text-embedding-3-small
+HUMAN_REVIEW=true
 ```
 
-### 3. Run the Application
+| Setting | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `AZURE_ENDPOINT` | yes | — | Your Azure OpenAI endpoint |
+| `AZURE_API_KEY` | yes | — | Your Azure OpenAI key |
+| `AZURE_API_VERSION` | no | `2024-12-01-preview` | API version |
+| `AZURE_DEPLOYMENT_NAME` | no | `gpt-4o` | Chat model deployment |
+| `AZURE_EMBEDDING_DEPLOYMENT` | no | `text-embedding-3-small` | Embedding model deployment |
+| `HUMAN_REVIEW` | no | `true` | Set to `false` to let answers that pass the output filter through without review |
+
+### 3. Run the application
 ```bash
-python doc_intelligence_agent.py
+python doc_intelligence_agent.py                    # uses sample_document.txt
+python doc_intelligence_agent.py path/to/contract.pdf
 ```
 
-Or use the Streamlit UI:
-```bash
-streamlit run app.py
-```
-
-## Usage Examples
-
-### Terminal Mode
-```bash
-python doc_intelligence_agent.py
-```
+## Usage
 
 The system will:
-1. Load `sample_document.txt`
-2. Generate a summary
-3. Extract entities
+1. Load the document and extract its text
+2. Chunk it, embed the chunks, and store them in ChromaDB
+3. Generate a summary and extract entities
 4. Start an interactive Q&A session
 
 ### Example Interaction
 ```
-DOCUMENT INTELLIGENCE AGENT
-
-Loading document: sample_document.txt
-
-Generating summary...
-
-SUMMARY:
-This Service Agreement between ABC Corporation and XYZ Industries outlines 
-software development services with a $5,000 monthly retainer, 12-month 
-initial term, and 30-day termination clause.
-
-KEY ENTITIES:
-{
-  "names": ["ABC Corporation", "XYZ Industries"],
-  "dates": ["January 15, 2024"],
-  "amounts": ["$5,000", "$150", "2%"],
-  "locations": []
-}
-
-Ask questions about the document (type 'quit' to exit)
+Indexing document (chunking and embedding)...
+Indexed 2 chunks into ChromaDB
 
 Your question: What happens if payment is late?
 
-Thinking...
+------------------------------------------------------------
+REVIEW REQUIRED
+------------------------------------------------------------
+Question: What happens if payment is late?
+
+Draft answer:
+A late payment penalty of 2% per month applies [1].
+
+Automated check: Grounded in retrieved excerpts
+
+Sources:
+  - sample_document.txt::0 (distance 0.21): SERVICE AGREEMENT This Service Agreement ...
+
+[a]pprove, [e]dit or [r]eject? a
 
 ANSWER:
-According to Section 2 (Payment Terms), if payment is late, there is a 
-2% per month late payment penalty applied until the balance is resolved.
+A late payment penalty of 2% per month applies [1].
 ```
 
 ## Database Schema
@@ -137,65 +122,47 @@ Query history is stored in `document_queries.db`:
 
 ```sql
 CREATE TABLE queries (
-    id INTEGER PRIMARY KEY,
-    document_name TEXT,
-    query TEXT,
-    response TEXT,
-    timestamp DATETIME
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_name TEXT NOT NULL,
+    query TEXT NOT NULL,
+    response TEXT NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status TEXT,       -- approved, edited, rejected, auto_approved, blocked_by_filter, rejected_by_validation, error
+    sources TEXT,      -- JSON list of the chunk ids used
+    review_note TEXT   -- reviewer's note or the filter's reason
 );
 ```
 
+Older databases are upgraded in place on start-up.
+
 ## Key Components
 
-### `load_document(file_path)`
-Loads text from PDF, DOCX, or TXT files.
-
-### `chunk_text(text, chunk_size=2000)`
-Splits long documents into overlapping chunks for efficient processing.
-
-### `validate_prompt(query, document_summary)`
-Validates query relevance before sending to Azure OpenAI. This is the "responsible AI" feature.
-
-### `summarize_document(text)`
-Generates a concise summary using GPT-4o.
-
-### `extract_entities(text)`
-Identifies and categorizes key information as structured JSON.
-
-### `answer_question(text, question, document_name)`
-Answers a user question based on document content, with validation and logging.
-
-## Technical Details
-
-- **Model**: GPT-4o via Azure OpenAI
-- **API Version**: 2024-12-01-preview
-- **Storage**: SQLite for local query history
-- **Responsible AI**: Prompt validation before API calls to prevent off-topic queries
-
-## Use Cases
-
-- **Contract Review**: Summarize agreements and extract key terms
-- **Financial Documents**: Extract amounts, dates, and payment terms
-- **Technical Documentation**: Answer questions about system architecture and requirements
-- **Compliance**: Audit trail of all document queries for regulatory requirements
-- **Research**: Quickly extract information from long reports
+| Function | Purpose |
+| --- | --- |
+| `load_document(file_path)` | Extracts text from PDF, DOCX (paragraphs and tables), or TXT |
+| `chunk_text(text, chunk_size=1000, overlap=200)` | Splits text into overlapping chunks, breaking at paragraph or line ends |
+| `embed_texts(texts)` | Creates embeddings with the Azure OpenAI embedding deployment |
+| `index_document(collection, document_name, text)` | Chunks, embeds, and stores a document in ChromaDB (re-indexing replaces old chunks) |
+| `retrieve_chunks(collection, question, document_name)` | Semantic vector search for the most relevant chunks |
+| `validate_prompt(query, document_summary)` | Input check: rejects off-topic questions; fails closed on errors |
+| `filter_output(answer, chunks, finish_reason)` | Output check: Azure content filter result + LLM groundedness check |
+| `human_review(question, answer, chunks, filter_reason)` | Reviewer approves, edits, or rejects the answer before it is shown |
+| `answer_question(collection, question, document_name, summary)` | The full RAG flow, with logging |
+| `summarize_document(text)` / `extract_entities(text)` | Summary and JSON entity extraction |
 
 ## Limitations
 
-- Document size: Tested up to 50+ pages
+- Summary and entity extraction read the first 3,000 / 4,000 characters; Q&A uses the whole document through retrieval
+- Image-only (scanned) PDFs produce no text
 - API rate limits apply (based on Azure subscription)
-- Accuracy depends on document clarity and formatting
 
 ## Future Enhancements
 
 - [ ] Web UI with Streamlit
 - [ ] Support for image-based PDFs (OCR)
 - [ ] Multi-document queries (cross-document search)
-- [ ] Fine-tuned models for domain-specific documents
+- [ ] Map-reduce summarization for long documents
 - [ ] Integration with Microsoft 365 via Microsoft Graph API
-- [ ] Power Automate workflow integration
-
-
 
 ## License
 

@@ -195,17 +195,7 @@ Answers a user question based on document content, with validation and logging.
 - [ ] Integration with Microsoft 365 via Microsoft Graph API
 - [ ] Power Automate workflow integration
 
-## Project Alignment with Job Requirements
 
-This project demonstrates the core skills required for the AI & Application Intern role:
-
-✅ **Building Copilot Agents** — document Q&A is a core Copilot capability  
-✅ **Document Summarization** — automatic summary generation  
-✅ **Classification & Entity Extraction** — key information categorization  
-✅ **Intelligent Search** — grounded question answering over enterprise data  
-✅ **Responsible AI** — prompt validation and output filtering  
-✅ **Azure Integration** — uses Azure OpenAI API  
-✅ **Data Engineering** — document processing and SQLite logging  
 
 ## License
 
